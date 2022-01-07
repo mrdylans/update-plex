@@ -1,70 +1,102 @@
 #!/usr/bin/python3
 
 import requests
-import json
 import sys
 from discord import Webhook, RequestsWebhookAdapter
 import os
 import subprocess
 
 
-# Tautulli
-tautulliUrl = 'localhost'
+########################
+# --- BEGIN CONFIGS -- #
+#
+
+# Tautulli Config
+tautulliUrl = 'tautulli.local'
 tautulliPort = '8181'
 tautulliApiKey = ''
 
-# Discord
-discordEnable = True
-discordWebhookUrl = ''
-discordAvatarUrl = ''
-discordUsername = 'Plex Media Server'
+# Discord Config
+webhookUrl = ''
+avatarUrl = ''
+username = 'Plex Media Server (Tautulli)'
 
-# Docker
-cleanupEnable = True        #deletes previous docker images if not in use
-docker = '/usr/bin/docker'
-dockerCompose = '/usr/bin/docker-compose'
-composeYaml = '~/docker/plex/docker-compose.yml'
+# Updatable containers
+contlist = {
+        'plex': {
+            'tautulliCmd': 'get_pms_update',
+            'discord_message_label': 'Plex Media Server',
+            'update_available_label': 'update_available',
+            'update_version_label': 'version',
+            'docker_compose_file': '',
+            'docker_image': 'plexinc/pms-docker'
+        },
+        'tautulli': {
+            'tautulliCmd': 'update_check',
+            'discord_message_label': 'Tautulli',
+            'update_available_label': 'update',
+            'update_version_label': 'latest_release',
+            'docker_compose_file': '',
+            'docker_image': 'tautulli/tautulli'
+        },
+    }
+
+#
+# --- END CONFIGS -- #
+######################
 
 
-# discord webhook notification
-def discordWebhookNotif(message):
-    webhook = Webhook.from_url(discordWebhookUrl, adapter=RequestsWebhookAdapter())
-    webhook.send(content=message, username=discordUsername, avatar_url=discordAvatarUrl)
+# Print usage statement if container name is missing
+def usage(exit_code=0):
+    print("Must specify container name [plex, tautulli].")
+    exit(exit_code)
 
 
-# query tautulli API
-def tautulliApi(tautulliCmd):
-    try:
-        r = requests.get("http://{}:{}/api/v2?apikey={}&cmd={}".format(tautulliUrl, tautulliPort, tautulliApiKey, tautulliCmd))
-    except requests.exceptions.RequestException as e:
-        raise SystemExit(e)
-    
-    return r.json()['response']
+###
+# Get container name as command line arg
+try:
+    container = sys.argv[1]
+except:
+    usage(1)
 
 
-response = tautulliApi('get_pms_update')
+###
+# Get update availability from Tautulli API
+try:
+    r = requests.get("http://{}:{}/api/v2?apikey={}&cmd={}".format(tautulliUrl, tautulliPort, tautulliApiKey, contlist[container]['tautulliCmd']))
+except requests.exceptions.RequestException as e:
+    raise SystemExit(e)
+
+response = r.json()['response']
+print(response)
+
+
+###
+# Pull docker image and restart if there's an update available
 if response['result'] == 'success':
-    if(response['data']['update_available']):
+    if(response['data'][contlist[container]['update_available_label']]):
         #send notification before starting
-        discordWebhookNotif("Plex Media Server version {} is now available. The plex docker container will be restarted to apply this update.".format(response['data']['version'])) if discordEnable
+        webhook = Webhook.from_url(webhookUrl, adapter=RequestsWebhookAdapter())
+        message = "{} version {} is now available. The {} docker container will be restarted to apply this update.".format(contlist[container]['discord_message_label'], response['data'][contlist[container]['update_version_label']], container)
+        webhook.send(content=message, username=username, avatar_url=avatarUrl)
 
-        #retart plex for update
-        os.system("{} -f {} pull".format(dockerCompose, composeYaml))
-        os.system("{} -f {} stop".format(dockerCompose, composeYaml))
-        os.system("{} -f {} up -d".format(dockerCompose, composeYaml))
+        #retart container for update
+        os.system("/usr/bin/docker-compose -f {} pull".format(contlist[container]['docker_compose_file']))
+        os.system("/usr/bin/docker-compose -f {} stop".format(contlist[container]['docker_compose_file']))
+        os.system("/usr/bin/docker-compose -f {} up -d".format(contlist[container]['docker_compose_file']))
 
         #clean up old images
-        if cleanupEnable:
-            images = subprocess.Popen([docker, 'image', 'ls'], stdout=subprocess.PIPE)
-            imgdict = []
-            for img in images.stdout:
-                line = img.decode('utf-8').rstrip()
-                if 'plexinc/pms-docker' in line:
-                    imgdict.append(line.split())
-            
-            for i in imgdict:
-                if i[1] != 'latest':
-                    os.system("{} image rm {}".format(docker, i[2]))
+        images = subprocess.Popen(['/usr/bin/docker', 'image', 'ls'], stdout=subprocess.PIPE)
+        imgdict = []
+        for img in images.stdout:
+            line = img.decode('utf-8').rstrip()
+            if contlist[container]['docker_image'] in line:
+                imgdict.append(line.split())
+
+        for i in imgdict:
+            if i[1] != 'latest':
+                os.system("/usr/bin/docker image rm {}".format(i[2]))
 
         #send notification when done
-        discordWebhookNotif("Plex Media Server has been updated to version {}".format(response['data']['version'])) if discordEnable
+        message = "{} has been updated to version {}".format(contlist[container]['discord_message_label'], response['data'][contlist[container]['update_version_label']])
+        webhook.send(content=message, username=username, avatar_url=avatarUrl)
