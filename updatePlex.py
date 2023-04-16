@@ -2,7 +2,7 @@
 
 import requests
 import sys
-from discord import Webhook, RequestsWebhookAdapter
+from discord import SyncWebhook
 import os
 import subprocess
 
@@ -76,7 +76,7 @@ print(response)
 if response['result'] == 'success':
     if(response['data'][contlist[container]['update_available_label']]):
         #send notification before starting
-        webhook = Webhook.from_url(webhookUrl, adapter=RequestsWebhookAdapter())
+        webhook = SyncWebhook.from_url(webhookUrl)
         message = "{} version {} is now available. The {} docker container will be restarted to apply this update.".format(contlist[container]['discord_message_label'], response['data'][contlist[container]['update_version_label']], container)
         webhook.send(content=message, username=username, avatar_url=avatarUrl)
 
